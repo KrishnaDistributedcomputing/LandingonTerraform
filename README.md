@@ -3,6 +3,9 @@ title: Azure Bastion Host and Service using Terraform
 description: Create Azure Bastion Host and Service using Terraform
 ---
 
+Descriptin of the script:-
+The script is creating two important Azure Bastion resources - Azure Bastion Host and Azure Bastion Service, using various Azure resources and Terraform modules. The script starts by creating SSH keys for the Azure Linux VMs that will be used for the Bastion Host. It then defines input variables, creates the necessary resources for the Bastion Host, moves the SSH key to the Bastion Host, creates the Azure Bastion Service, and creates the Terraform output values. The script also removes public access to the Web Linux VM and provides instructions for verifying the created resources. Finally, it provides instructions for deleting the resources and cleaning up files.
+
 ## Step-00: Introduction
 - We are going to create two important Bastion Resources 
 1. Azure Bastion Host 
