@@ -1,631 +1,397 @@
 ---
-title: Azure IaC DevOps for Terraform Project
-description: Create Azure IaC DevOps for Terraform Project
+title: Azure Bastion Host and Service using Terraform
+description: Create Azure Bastion Host and Service using Terraform
 ---
 
 ## Step-00: Introduction
-### Build Pipeline - CI
-- Implement Build Pipeline (Continuous Integration Pipeline)
-- Use `CopyFiles` and `PublishArtifacts` Tasks in Build Pipeline
-### Release Pipelines - CD
-- Implement Deployment stages `Dev, QA, Stage and Prod`
-- In each stage implement below listed Tasks for a `Ubuntu Agent`
-  - terraform install 
-  - terraform init
-  - terraform validate
-  - terraform plan
-  - terraform apply -auto-approve
-- Test both CI CD Pipelines  
+- We are going to create two important Bastion Resources 
+1. Azure Bastion Host 
+2. Azure Bastion Service 
+- We are going to use following Azure Resources for the same.
+1. Terraform Input Variables
+2. azurerm_public_ip
+3. azurerm_network_interface
+4. azurerm_linux_virtual_machine
+5. Terraform Null Resource `null_resource`
+6. Terraform File Provisioner
+7. Terraform remote-exec Provisioner
+8. azurerm_bastion_host
+9. Terraform Output Values
 
-- [Azure DevOps Parallelism Free Tier Request Form](https://forms.office.com/pages/responsepage.aspx?id=v4j5cvGGr0GRqy180BHbR63mUWPlq7NEsFZhkyH8jChUMlM3QzdDMFZOMkVBWU5BWFM3SDI2QlRBSC4u)
 
-## Step-01: Review Terraform Configs
-- **Folder:** Git-Repo-Files/terraform-manifests
-
-### Step-01-01: c1-versions.tf
+## Pre-requisite Note: Create SSH Keys for Azure Linux VM
 ```t
-# Terraform State Storage to Azure Storage Container (Values will be taken from Azure DevOps)
-  backend "azurerm" {
-     }   
+# Create Folder
+cd terraform-manifests/
+mkdir ssh-keys
+
+# Create SSH Key
+cd ssh-ekys
+ssh-keygen \
+    -m PEM \
+    -t rsa \
+    -b 4096 \
+    -C "azureuser@myserver" \
+    -f terraform-azure.pem 
+Important Note: Please don't provide any passhprase, as the passphrase is not supported on latest provider versions
+
+# List Files
+ls -lrt ssh-keys/
+
+# Files Generated after above command 
+Public Key: terraform-azure.pem.pub -> Rename as terraform-azure.pub
+Private Key: terraform-azure.pem
+
+# Permissions for Pem file
+chmod 400 terraform-azure.pem
 ```
 
-### Step-01-02: c7-01-web-linuxvm-input-variables.tf
-- Define Input Variables for VM Size and VM admin user name. 
-- If we required we can parameterize more arguments in `azurerm_linux_virtual_machine` resource. 
+## Step-01: c8-01-bastion-host-input-variables.tf
 ```t
-# Linux VM Input Variables Placeholder file.
-variable "web_linuxvm_size" {
-  description = "Web Linux VM Size"
-  type = string 
-  default = "Standard_DS1_v2"
+# Bastion Linux VM Input Variables Placeholder file.
+variable "bastion_service_subnet_name" {
+  description = "Bastion Service Subnet Name"
+  default = "AzureBastionSubnet"
 }
-
-variable "web_linuxvm_admin_user" {
-  description = "Web Linux VM Admin Username"
-  type = string 
-  default = "azureuser"
+variable "bastion_service_address_prefixes" {
+  description = "Bastion Service Address Prefixes"
+  default = ["10.0.101.0/27"]
 }
 ```
-### Step-01-03: c7-05-web-linuxvm-resource.tf
-- Update arguments `size`, `admin_username` and `admin_ssh_key.username` in Linux VM Resource
+
+## Step-02: c8-02-bastion-host-linuxvm.tf
 ```t
-# Resource: Azure Linux Virtual Machine
-resource "azurerm_linux_virtual_machine" "web_linuxvm" {
-  name = "${local.resource_name_prefix}-web-linuxvm"
-  #computer_name = "web-linux-vm" # Hostname of the VM (Optional)
+# Resource-1: Create Public IP Address
+resource "azurerm_public_ip" "bastion_host_publicip" {
+  name                = "${local.resource_name_prefix}-bastion-host-publicip"
   resource_group_name = azurerm_resource_group.rg.name
-  location = azurerm_resource_group.rg.location 
-  size = var.web_linuxvm_size
-  admin_username = var.web_linuxvm_admin_user
-  network_interface_ids = [ azurerm_network_interface.web_linuxvm_nic.id ]
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku = "Standard"
+}
+
+# Resource-2: Create Network Interface
+resource "azurerm_network_interface" "bastion_host_linuxvm_nic" {
+  name                = "${local.resource_name_prefix}-bastion-host-linuxvm-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "bastion-host-ip-1"
+    subnet_id                     = azurerm_subnet.bastionsubnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.bastion_host_publicip.id 
+  }
+}
+
+# Resource-3: Azure Linux Virtual Machine - Bastion Host
+resource "azurerm_linux_virtual_machine" "bastion_host_linuxvm" {
+  name = "${local.resource_name_prefix}-bastion-linuxvm"
+  #computer_name = "bastionlinux-vm"  # Hostname of the VM (Optional)
+  resource_group_name = azurerm_resource_group.rg.name
+  location = azurerm_resource_group.rg.location
+  size = "Standard_DS1_v2"
+  admin_username = "azureuser"
+  network_interface_ids = [ azurerm_network_interface.bastion_host_linuxvm_nic.id ]
   admin_ssh_key {
-    username = var.web_linuxvm_admin_user
+    username = "azureuser"
     public_key = file("${path.module}/ssh-keys/terraform-azure.pub")
   }
   os_disk {
     caching = "ReadWrite"
     storage_account_type = "Standard_LRS"
-  }  
+  }
   source_image_reference {
     publisher = "RedHat"
     offer = "RHEL"
     sku = "83-gen2"
     version = "latest"
-  }  
-  #custom_data = filebase64("${path.module}/app-scripts/redhat-webvm-script.sh")
-  custom_data = base64encode(local.webvm_custom_data)
+  }
 }
 ```
-### Step-01-04: terraform.tfvars
+
+## Step-03: c8-03-move-ssh-key-to-bastion-host.tf
+### Step-03-01: Add Null Provider in c1-versions.tf
 ```t
-# Generic Variables 
-business_divsion = "hr"
-resource_group_location = "eastus"
-resource_group_name = "rg"
+# Terraform Block
+terraform {
+  required_version = ">= 1.0.0"
+  required_providers {
+    azurerm = {
+      source = "hashicorp/azurerm"
+      version = ">= 2.0" 
+    }
+    random = {
+      source = "hashicorp/random"
+      version = ">= 3.0"
+    }
+    null = {
+      source = "hashicorp/null"
+      version = ">= 3.0"
+    }     
+  }
+}
 ```
-### Step-01-05: dev.tfvars
+### Step-03-02: Add Null Resource and Terraform Provisioners
 ```t
-# Environment Name
-environment = "dev"
+# Create a Null Resource and Provisioners
+resource "null_resource" "name" {
+  depends_on = [azurerm_linux_virtual_machine.bastionlinuxvm]
+# Connection Block for Provisioners to connect to Azure VM Instance
+  connection {
+    type = "ssh"
+    host = azurerm_linux_virtual_machine.bastionlinuxvm.public_ip_address
+    user = azurerm_linux_virtual_machine.bastionlinuxvm.admin_username
+    private_key = file("${path.module}/ssh-keys/terraform-azure.pem")
+  }
 
-# Virtual Network Variables
-vnet_name = "vnet"
-vnet_address_space = ["10.1.0.0/16"]
+## File Provisioner: Copies the terraform-key.pem file to /tmp/terraform-key.pem
+  provisioner "file" {
+    source      = "ssh-keys/terraform-azure.pem"
+    destination = "/tmp/terraform-azure.pem"
+  }
+## Remote Exec Provisioner: Using remote-exec provisioner fix the private key permissions on Bastion Host
+  provisioner "remote-exec" {
+    inline = [
+      "sudo chmod 400 /tmp/terraform-azure.pem"
+    ]
+  }
+}
 
-web_subnet_name = "websubnet"
-web_subnet_address = ["10.1.1.0/24"]
-
-app_subnet_name = "appsubnet"
-app_subnet_address = ["10.1.11.0/24"]
-
-db_subnet_name = "dbsubnet"
-db_subnet_address = ["10.1.21.0/24"]
-
-bastion_subnet_name = "bastionsubnet"
-bastion_subnet_address = ["10.1.100.0/24"]
-
-# Web Linux VM Variables
-web_linuxvm_size = "Standard_DS1_v2"
-web_linuxvm_admin_user = "azureuser"
-```
-
-### Step-01-06: qa.tfvars
-```t
-# Environment Name
-environment = "qa"
-
-# Virtual Network Variables
-vnet_name = "vnet"
-vnet_address_space = ["10.2.0.0/16"]
-
-web_subnet_name = "websubnet"
-web_subnet_address = ["10.2.1.0/24"]
-
-app_subnet_name = "appsubnet"
-app_subnet_address = ["10.2.11.0/24"]
-
-db_subnet_name = "dbsubnet"
-db_subnet_address = ["10.2.21.0/24"]
-
-bastion_subnet_name = "bastionsubnet"
-bastion_subnet_address = ["10.2.100.0/24"]
-
-# Web Linux VM Variables
-web_linuxvm_size = "Standard_DS1_v2"
-web_linuxvm_admin_user = "azureuser"
-```
-### Step-01-07: stage.tfvars
-```t
-# Environment Name
-environment = "stage"
-
-# Virtual Network Variables
-vnet_name = "vnet"
-vnet_address_space = ["10.3.0.0/16"]
-
-web_subnet_name = "websubnet"
-web_subnet_address = ["10.3.1.0/24"]
-
-app_subnet_name = "appsubnet"
-app_subnet_address = ["10.3.11.0/24"]
-
-db_subnet_name = "dbsubnet"
-db_subnet_address = ["10.3.21.0/24"]
-
-bastion_subnet_name = "bastionsubnet"
-bastion_subnet_address = ["10.3.100.0/24"]
-
-# Web Linux VM Variables
-web_linuxvm_size = "Standard_DS1_v2"
-web_linuxvm_admin_user = "azureuser"
+# Creation Time Provisioners - By default they are created during resource creations (terraform apply)
+# Destory Time Provisioners - Will be executed during "terraform destroy" command (when = destroy)
 ```
 
-### Step-01-08: prod.tfvars
+## Step-04: c8-04-AzureBastionService.tf
 ```t
-# Environment Name
-environment = "prod"
 
-# Virtual Network Variables
-vnet_name = "vnet"
-vnet_address_space = ["10.4.0.0/16"]
+# Azure Bastion Service - Resources
+## Resource-1: Azure Bastion Subnet
+resource "azurerm_subnet" "bastion_service_subnet" {
+  name                 = var.bastion_service_subnet_name
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = var.bastion_service_address_prefixes
+}
 
-web_subnet_name = "websubnet"
-web_subnet_address = ["10.4.1.0/24"]
+# Resource-2: Azure Bastion Public IP
+resource "azurerm_public_ip" "bastion_service_publicip" {
+  name                = "${local.resource_name_prefix}-bastion-service-publicip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
 
-app_subnet_name = "appsubnet"
-app_subnet_address = ["10.4.11.0/24"]
+# Resource-3: Azure Bastion Service Host
+resource "azurerm_bastion_host" "bastion_host" {
+  name                = "${local.resource_name_prefix}-bastion-service"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 
-db_subnet_name = "dbsubnet"
-db_subnet_address = ["10.4.21.0/24"]
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.bastion_service_subnet.id
+    public_ip_address_id = azurerm_public_ip.bastion_service_publicip.id
+  }
+}
 
-bastion_subnet_name = "bastionsubnet"
-bastion_subnet_address = ["10.4.100.0/24"]
-
-# Web Linux VM Variables
-web_linuxvm_size = "Standard_DS1_v2"
-web_linuxvm_admin_user = "azureuser"
 ```
 
-### Step-01-09: No Changes to files
-- c2-generic-input-variables.tf
-- c3-locals.tf
-- c4-random-resources.tf
-- c5-resource-group.tf
-- c6-01 to c6-07 Virtual Network Files
-- c7-02-web-linuxvm-publicip.tf
-- c7-03-web-linuxvm-network-interface.tf
-- c7-04-web-linuxvm-network-security-group.tf
-- c7-06-web-linuxvm-outputs.tf
-
-
-## Step-02: Create Github Repository and Check-In Files
-### Step-02-01: Create new github Repository
-- **URL:** github.com
-- Click on **Create a new repository**
-- **Repository Name:** terraform-on-azure-with-azure-devops
-- **Description:** Terraform on Azure with Azure IaC DevOps
-- **Repo Type:** Public / Private
-- **Initialize this repository with:**
-- **CHECK** - Add a README file
-- **CHECK** - Add .gitignore 
-- **Select .gitignore Template:** Terraform
-- **CHECK** - Choose a license  (Optional)
-- **Select License:** Apache 2.0 License
-- Click on **Create repository**
-
-## Step-02-02: Clone Github Repository to Local Desktop
+## Step-05: c8-05-bastion-outputs.tf
 ```t
-# Clone Github Repo
-git clone https://github.com/<YOUR_GITHUB_ID>/<YOUR_REPO>.git
-git clone https://github.com/stacksimplify/terraform-on-azure-with-azure-devops.git
+## Bastion Host Public IP Output
+output "bastion_host_linuxvm_public_ip_address" {
+  description = "Bastion Host Linux VM Public Address"
+  value = azurerm_public_ip.bastion_host_publicip.ip_address
+}
 ```
 
-## Step-02-03: Copy files from Git-Repo-Files folder to local repo & Check-In Code
-
-- **Source Location:** Git-Repo-Files
-- **Destination Location:** Copy all folders and files from `Git-Repo-Files` newly cloned github repository folder in your local desktop `terraform-on-azure-with-azure-devops`
-- **Check-In code to Remote Repository**
+## Step-06: terraform.tfvars
 ```t
-# GIT Status
-git status
-
-# Git Local Commit
-git add .
-git commit -am "First Commit"
-
-# Push to Remote Repository
-git push
-
-# Verify the same on Remote Repository
-https://github.com/stacksimplify/terraform-on-azure-with-azure-devops.git
+# Newly added
+bastion_service_subnet_name = "AzureBastionSubnet"
+bastion_service_address_prefixes = ["10.1.101.0/27"]
 ```
-## Step-03: Terraform Dependency Lock File Concept
-- Understand [Terraform Dependency Lock File Concept](https://www.terraform.io/docs/language/dependency-lock.html)
-- For detailed understanding we need to reference this topic from our [Demo-67: Azure HashiCorp Terraform Associate Certification course](https://github.com/stacksimplify/hashicorp-certified-terraform-associate-on-azure/tree/main/67-Terraform-Manage-Providers). Primarily refer [Step-04](https://github.com/stacksimplify/hashicorp-certified-terraform-associate-on-azure/tree/main/67-Terraform-Manage-Providers#step-04-command-terraform-providers-lock) and [Step-05](https://github.com/stacksimplify/hashicorp-certified-terraform-associate-on-azure/tree/main/67-Terraform-Manage-Providers#step-05-command-terraform-providers-lock-for-all-supported-platforms) of this section
+
+## Step-07: Remove Public Access to Web Linux VM
+- In this section and upcoming sections, we will not need internet fronting for Web Linux VM.
+- Here in this section we will remove the internet fronting for this linux vm by removing public IP Association.
+- Test the SSH Connectivity to Web Linux VM using 
+1. Azure Bastion Host Linux VM
+2. Azure Bastion Service
+### Step-07-01: Comment c7-02-web-linuxvm-publicip.tf
 ```t
-# Go to Local Git Repo 
-cd demo-repos
-cd terraform-on-azure-with-azure-devops/terraform-manifests
+/*
+# Resource-1: Create Public IP Address
+resource "azurerm_public_ip" "web_linuxvm_publicip" {
+  name                = "${local.resource_name_prefix}-web-linuxvm-publicip"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku = "Standard"
+  #domain_name_label = "app1-vm-${random_string.myrandom.id}"
+}
+*/
+```
 
-# Delete `.terraform.lock.hcl`
-Delete file if exists "`.terraform.lock.hcl`"
-rm -rf .terraform.lock.hcl  # Explicitly for students to get latest version of Providers on that respective day when you are learning this module
+### Step-07-02: c7-03-web-linuxvm-network-interface.tf
+- Comment public IP association related argument in Network Interface Resource `public_ip_address_id = azurerm_public_ip.web_linuxvm_publicip.id`
 
-# Terraform Providers lock for multiple platforms
-terraform providers lock -platform=windows_amd64 -platform=darwin_amd64 -platform=linux_amd64
+```t
+# Resource-2: Create Network Interface
+resource "azurerm_network_interface" "web_linuxvm_nic" {
+  name                = "${local.resource_name_prefix}-web-linuxvm-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 
+  ip_configuration {
+    name                          = "web-linuxvm-ip-1"
+    subnet_id                     = azurerm_subnet.websubnet.id
+    private_ip_address_allocation = "Dynamic"
+    #public_ip_address_id = azurerm_public_ip.web_linuxvm_publicip.id 
+  }
+}
+```
+
+### Step-07-03: c7-06-web-linuxvm-outputs.tf
+- Comment Outputs related to Public IP Address
+```t
+/*
+## Public IP Address
+output "web_linuxvm_public_ip" {
+  description = "Web Linux VM Public Address"
+  value = azurerm_public_ip.web_linuxvm_publicip.ip_address
+}
+*/
+# Linux VM Outputs
+/*
+## Virtual Machine Public IP
+output "web_linuxvm_public_ip_address" {
+  description = "Web Linux Virtual Machine Public IP"
+  value = azurerm_linux_virtual_machine.web_linuxvm.public_ip_address
+}
+*/
+```
+
+
+## Step-08: Execute Terraform Commands
+```t
 # Terraform Initialize
 terraform init
-Observation: 
-1. Provider plugins downloaded to ".terraform folder"
-2. `.terraform.lock.hcl` created with command `terraform providers lock` used by `terraform init` to download those respective providers
-3. We need to check-in this file `.terraform.lock.hcl` with our TF Configs to Git Repos for IaC DevOps Pipelines to ensure our provider versions doesnt get upgraded to latest versions and break our application. 
 
-# Delete ".terraform" folder
-rm -rf .terraform 
+# Terraform Validate
+terraform validate
 
-# We will ensure we are checking in `.terraform.lock.hcl`
-`.terraform.lock.hcl`
+# Terraform Plan
+terraform plan
 
-# GIT Status
-git status
+# Terraform Apply
+terraform apply -auto-approve
 
-# Git Local Commit
-git add .
-git commit -am "First Commit"
-
-# Push to Remote Repository
-git push
-
-# Verify the same on Remote Repository
-https://github.com/stacksimplify/terraform-on-azure-with-azure-devops.git
+# Important Note: 
+1. Azure Bastions Service takes 10 to 15 minutes to create. 
 ```
 
-## Step-04: Create Azure DevOps Organization
-### Step-04-01: Create Azure DevOps Organization
-- Understand about [Azure DevOps Agents and Free-Tier Limits](https://docs.microsoft.com/en-us/azure/devops/pipelines/licensing/concurrent-jobs?view=azure-devops&tabs=ms-hosted)
-- Navigate to `https://dev.azure.com`
-- Click on `Sign in to Azure DevOps`
-- Provide your Azure Cloud admin user
-  - Username: XXXXXXXXXXXXXX
-  - Password: XXXXXXXXXXXXXX
-- Click on create **New Organization**
-- **Name your Azure DevOps organization:** stacksimplify1
-- **We'll host your projects in:** Choose the location (Azure selects based on current location where you are accessing from)
-- **Enter the characters you see:** 
-- Click on **Continue**
+### Important Note about Azure Bastion Service
+- It takes close to 10 to 15 minutes to create this service.
+```log
+azurerm_bastion_host.bastion_host: Still creating... [10m50s elapsed]
+azurerm_bastion_host.bastion_host: Still creating... [11m0s elapsed]
+azurerm_bastion_host.bastion_host: Still creating... [11m10s elapsed]
+azurerm_bastion_host.bastion_host: Still creating... [11m20s elapsed]
+azurerm_bastion_host.bastion_host: Still creating... [11m30s elapsed]
+azurerm_bastion_host.bastion_host: Creation complete after 11m35s [id=/subscriptions/82808767-144c-4c66-a320-b30791668b0a/resourceGroups/hr-dev-rg/providers/Microsoft.Network/bastionHosts/hr-dev-bastion-service]
 
-### Step-04-02: Request for Azure DevOps Parallelism
-- [Azure DevOps Parallelism Free Tier Request Form](https://forms.office.com/pages/responsepage.aspx?id=v4j5cvGGr0GRqy180BHbR63mUWPlq7NEsFZhkyH8jChUMlM3QzdDMFZOMkVBWU5BWFM3SDI2QlRBSC4u)
-
-
-## Step-05: Install Terraform Extension for Azure DevOps
-- [Terraform Extension for Azure DevOps](https://marketplace.visualstudio.com/items?itemName=ms-devlabs.custom-terraform-tasks)
-
-## Step-06: Create New Project in Azure DevOps Organization
-- Create a New Project in Azure DevOps Organization newly created
-- Click on **New Project**
-- **Project Name:** terraform-on-azure-with-azure-devops
-- **Description:** terraform-on-azure-with-azure-devops
-- **Visibility:** Private
-- Click on **Create**
-
-## Step-07: Understand Azure Pipelines
-- Understand about Azure Pipelines
-- Pipeline Hierarchial Flow: `Stages -> Stage -> Jobs -> Job -> Steps -> Task1, Task2`
-
-## Step-08: Create Azure CI (Continuous Integration) Pipeline (Build Pipeline)
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Pipelines
-- Click on **New Pipeline**
-- **Where is your code?:** GitHub
-- Follow browser redirect steps to integrate with Github Account
-- **Select a repository:** stacksimplify/terraform-on-azure-with-azure-devops
-- **Configure your pipeline:** Starter Pipeline
-- Rename the Pipeline file name to `01-terraform-azure-devops-ci-pipeline`
-- Build the below code using two tasks listed below
-  - Copy Files
-  - Publish Artifacts
-- Click on **Save and Run** to Run the pipeline  
-```yaml
-trigger:
-- main
-
-# Stages
-# Stage-1:
-  # Task-1: Copy terraform-manifests files to Build Artifact Directory
-  # Task-2: Publish build articats to Azure Pipelines
-# Pipeline Hierarchial Flow: Stages -> Stage -> Jobs -> Job -> Steps -> Task1, Task2, Task3  
-
-stages:
-# Build Stage 
-- stage: Build
-  displayName: Build Stage
-  jobs:
-  - job: Build
-    displayName: Build Job
-    pool:
-      vmImage: 'ubuntu-latest'
-    steps: 
-## Publish Artifacts pipeline code in addition to Build and Push          
-    - bash: echo Contents in System Default Working Directory; ls -R $(System.DefaultWorkingDirectory)        
-    - bash: echo Before copying Contents in Build Artifact Directory; ls -R $(Build.ArtifactStagingDirectory)        
-    # Task-2: Copy files (Copy files from a source folder to target folder)
-    # Source Directory: $(System.DefaultWorkingDirectory)/terraform-manifests
-    # Target Directory: $(Build.ArtifactStagingDirectory)
-    - task: CopyFiles@2
-      inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)/terraform-manifests'
-        Contents: '**'
-        TargetFolder: '$(Build.ArtifactStagingDirectory)'
-        OverWrite: true
-    # List files from Build Artifact Staging Directory - After Copy
-    - bash: echo After copying to Build Artifact Directory; ls -R $(Build.ArtifactStagingDirectory)  
-    # Task-3: Publish build artifacts (Publish build to Azure Pipelines)           
-    - task: PublishBuildArtifacts@1
-      inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'terraform-manifests'
-        publishLocation: 'Container'  
-
+Apply complete! Resources: 36 added, 0 changed, 0 destroyed.
 ```
-- Verify First Run logs
-- Rename the Pipeline name to `Terraform Continuous Integration CI Pipeline`
 
-## Step-09: Sync Local Git Repo
-- A new file named `01-terraform-azure-devops-ci-pipeline.yaml` will be added git Remote Repo
-- Sync the same thing to your local Git Repo
+## Step-09: Verify Resources - Bastion Host
 ```t
-# Local Git Repo
-git pull
+# Verify Resources - Virtual Network
+1. Azure Resource Group
+2. Azure Virtual Network
+3. Azure Subnets (Web, App, DB, Bastion)
+4. Azure Network Security Groups (Web, App, DB, Bastion)
+5. View the topology
+6. Verify Terraform Outputs in Terraform CLI
+
+# Verify Resources - Web Linux VM 
+1. Verify Network Interface created for Web Linux VM
+2. Verify Web Linux VM
+3. Verify Network Security Groups associated with VM (web Subnet NSG)
+4. View Topology at Web Linux VM -> Networking
+5. Verify if only private IP associated with Web Linux VM
+
+# Verify Resources - Bastion Host
+1. Verify Bastion Host VM Public IP
+2. Verify Bastion Host VM Network Interface
+3. Verify Bastion VM
+4. Verify Bastion VM -> Networking -> NSG Rules
+5. Verify Bastion VM Topology
+
+# Connect to Bastion Host VM
+1. Connect to Bastion Host Linux VM
+ssh -i ssh-keys/terraform-azure.pem azureuser@<Bastion-Host-LinuxVM-PublicIP>
+sudo su - 
+cd /tmp
+ls 
+2. terraform-azure.pem file should be present in /tmp directory
+
+# Connect to Web Linux VM using Bastion Host VM
+1. Connect to Web Linux VM
+ssh -i ssh-keys/terraform-azure.pem azureuser@<Web-LinuxVM-PrivateIP>
+sudo su - 
+cd /var/log
+tail -100f cloud-init-output.log
+cd /var/www/html
+ls -lrt
+cd /var/www/html/app1
+ls -lrt
+exit
+exit
 ```
 
-## Step-10: Azure Release Pipelines Introduction
-1. Understand Azure Release Pipelines
-2. What are we going to implement as part of Release Pipelines ?
-3. Review the Infra we are going to provision. 
-4. Understand where Terraform State files will be stored for 4 environments. 
-5. Demonstrate Continuous Delivery by making a change to our TF Configs atleast for one environment (Prod)
-
-## Step-11: Create Azure Resource Manager Service Connection for Azure DevOps
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) > Project Settings -> Pipelines -> Service Connections
-- Click on **New Service Connection**
-- **Choose a service or connection type:** Azure Resource Manager
-- **Authentication Method:** Service principal (automatic)
-- **Scope level:** Subscription
-- **Subscription:** Select Subsciption if we have many
-- **Username:** Azure Cloud Admin User
-- **Password:** XXXXXXXXX
-- **Resource Group:** leave empty
-- **Service connection name:** terraformiacdevops1
-- **Description (optional):** terraformiacdevops1 Service Connection used for CICD Pipelines
-- **Security:** CHECK Grant access permission to all pipelines (leave to default checked)
-- Click on **Save**
-
-## Step-12: Create Storage Account for storing Terraform State Files
-- Create Storage Account, Storage Container if not created.
-- We have already created that as part of [Section-24-Step-02](https://github.com/stacksimplify/terraform-on-azure-cloud/tree/main/24-Terraform-Remote-State-Storage#step-02-create-azure-storage-account) which will re-use here. 
+## Step-10: Verify Resources - Bastion Service
 ```t
-# Terraform State Storage to Azure Storage Container
-    resource_group_name   = "terraform-storage-rg"
-    storage_account_name  = "terraformstate201"
-    container_name        = "tfstatefiles"
-    key                   = "dev-terraform.tfstate"
+# Verify Azure Bastion Service
+1. Go to Azure Management Porta Console -> Bastions
+2. Verify Bastion Service -> hr-dev-bastion-service
+3. Verify Settings -> Sessions
+4. Verify Settings -> Configuration
+
+# Connect to Web Linux VM using Bastion Service
+1. Go to Web Linux VM using Azure Portal Console
+2. Portal Console -> Virtual machines -> hr-dev-web-linuxvm ->Settings -> Connect
+3. Select "Bastion" tab -> Click on "Use Bastion"
+- Open in new window: checked
+- Username: azureuser
+- Authentication Type: SSH Private Key from Local File
+- Local File: Browse from ssh-keys/terraform-azure.pem
+- Click on Connect
+4. In new tab, we should be logged in to VM "hr-dev-web-linuxvm" 
+5. Run additional commands
+sudo su - 
+cd /var/www/html
+ls 
+cd /var/www/html/app1
+ls
+
+# Verify Bastion Sessions 
+1. Go to Azure Management Porta Console -> Bastions
+2. Verify Bastion Service -> hr-dev-bastion-service
+3. Verify Settings -> Sessions
 ```
 
-## Step-13: Release Pipelines - Create Dev Stage
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Releases
-- Click on **New Release Pipeline**
-- **Pipeline Name:** Terraform-CD
-### Dev Stage
-- **Stage Name:** Dev Stage
-- **Stage Owner:** stacksimplify@gmail.com (your-azure-admin-id)
-- Click on **1 Job, 0 Task**
-#### Agent Job
-- **Display Name:** Terraform Ubuntu Agent
-- **Agent Pool:** Azure Pipelines
-- **Agent Specification:** Ubuntu latest image
-- Rest all leave to defaults
-#### Task-1: Terraform Tool Installer   
-- **Display Name:** Install Terraform latest version
-- **Version:** 1.0.5 (as on today)
-- **Important Note:** Get latest terraform version number from [Terraform Downloads page](https://www.terraform.io/downloads.html)
-
-#### Task-2: Terraform: init
-- **Display Name:** Terraform: init
-- **Provider:** azurerm
-- **Command:** init
-- **Configuration directory:** Select by browsing it (Example: $(System.DefaultWorkingDirectory)/_Terraform Continuous Integration CI Pipeline/terraform-manifests)
-- **Additional command arguments:** Nothing leave empty
-- **AzureRM backend configuration**
-- **Azure subscription:** terraformiacdevops1 (Select the service connection created in step-10)
-- **Resource group:** terraform-storage-rg
-- **Storage account:** terraformstate201
-- **Container:** tfstatefiles
-- **Key:** dev-terraform.tfstate
-- Rest all leave to defaults
-
-#### Task-3: Terraform: validate
-- **Display Name:** Terraform: validate
-- **Provider:** azurerm
-- **Command:** validate
-- **Configuration directory:** Select by browsing it (Example: $(System.DefaultWorkingDirectory)/_Terraform Continuous Integration CI Pipeline/terraform-manifests)
-- **Additional command arguments:** Nothing leave empty
-- Rest all leave to defaults
-
-#### Task-4: Terraform: plan
-- **Display Name:** Terraform: plan
-- **Provider:** azurerm
-- **Command:** plan
-- **Configuration directory:** Select by browsing it (Example: $(System.DefaultWorkingDirectory)/_Terraform Continuous Integration CI Pipeline/terraform-manifests)
-- **Additional command arguments:** -var-file=dev.tfvars
-- **Azure subscription:** terraformiacdevops1 (Select the service connection created in step-10)
-- Rest all leave to defaults
-
-#### Task-5: Terraform: apply -auto-approve
-- **Display Name:** Terraform: apply -auto-approve
-- **Provider:** azurerm
-- **Command:** validate and apply
-- **Configuration directory:** Select by browsing it (Example: $(System.DefaultWorkingDirectory)/_Terraform Continuous Integration CI Pipeline/terraform-manifests)
-- **Additional command arguments:** -var-file=dev.tfvars -auto-approve
-- **Azure subscription:** terraformiacdevops1 (Select the service connection created in step-10)
-- Rest all leave to defaults
-
-- Click on **Save* to save the release-pipeline. 
-
-
-## Step-14: Release Pipeline - Artifacts Settings
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Releases -> Terraform-CD
-### Step-14-01: Add Artifacts
-- Click on **Add Artifacts**
-- **Source Type:** Build
-- **Project:** terraform-on-azure-with-azure-devops
-- **Source (build pipeline):** Terraform Continuous Integration CI Pipeline
-- **Default version:** Latest (leave to default)
-- **Source alias:** _Terraform Continuous Integration CI Pipeline (leave to default)
-- Click on **Add**
-
-### Step-14-02: Enable Continuous deployment trigger
-- **Continuous deployment trigger:** Enabled
-- Rest all leave to defaults
-
-## Step-15: Trigger Build (CI) and Release (CD) Pipelines
-- Make a minor change in git repo and push the changes from local git repo
+## Step-11: Delete Resources
 ```t
-## In any file add some changes
-Example: Add some comment in any of the *.tf files (Just for testing)
+# Delete Resources
+terraform destroy 
+[or]
+terraform apply -destroy -auto-approve
 
-# Git Status
-git status
-
-# Git Commit
-git commit -am "CICD-Test-1"
-
-# Git Push
-git push
+# Clean-Up Files
+rm -rf .terraform* 
+rm -rf terraform.tfstate*
 ```
-
-## Step-16: Review Build (CI) Pipeline  and Release Pipeline(CD) Logs
-### Verify Build Pipeline Logs
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Pipelines -> Terraform Continuous Integration CI Pipeline
-
-### Verify Release Pipeline Logs
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Releases -> Terraform CD
-
-
-## Step-17: Verify Dev Resources created in Azure Portal
-### Verify dev-terraform.tfsate file
-- Go to Storaage Accounts -> terraform-rg-storage -> terraformstate201 -> tfstatefiles
-- Verify the file `dev-terraform.tfstate`
-### Verify Dev Resources in Azure Portal
-1. Azure Virtual Network
-2. Azure Subnets
-3. Azure Public IP
-4. Azure Linux Virtual Machine
-
-## Step-18: Create Stages listed below by cloning Dev Stage in Releases
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Releases -> Terraform CD -> Edit
-- Updates include the following for QA, Stage and Prod
-### Task-1: Terraform: init
-- Update `Key` to respective environment
-- **QA Key:** qa-terraform.tfsate
-- **Stage Key:** stage-terraform.tfstate
-- **Prod Key:** prod-terraform.tfstate
-### Task-2: Terraform: plan
-- Update `Additional command arguments` to respective environment
-- **QA Additional command arguments:** -var-file=qa.tfvars
-- **Stage Additional command arguments:** -var-file=stage.tfvars
-- **Prod Additional command arguments:** -var-file=prod.tfvars
-### Task-3: Terraform: apply -auto-approve
-- Update `Additional command arguments` to respective environment
-- **QA Additional command arguments:** -var-file=qa.tfvars -auto-approve
-- **Stage Additional command arguments:** -var-file=stage.tfvars -auto-approve
-- **Prod Additional command arguments:** -var-file=prod.tfvars -auto-approve
-
-## Step-19: Add Pre-Deployment Approval and Post Deployment Approvals
-- **Pre-Deployment Approvals:** QA, Stage and Prod
-- **Post-Deployment Approvals:** Stage
-
-## Step-20: Trigger Build (CI) and Release (CD) Pipelines
-- Make a minor change in git repo and push the changes from local git repo
-```t
-## In any file add some changes
-Example: Add some comment in any of the *.tf files (Just for testing)
-
-# Git Status
-git status
-
-# Git Commit
-git commit -am "CICD-Test-2"
-
-# Git Push
-git push
-```
-
-
-## Step-21: Verify Resources created in Azure Portal for QA, Stage and Prod Environments
-### Verify TFState File for Dev, QA and Prod
-- Go to Storaage Accounts -> terraform-rg-storage -> terraformstate201 -> tfstatefiles
-- Verify the files listed below
-- qa-terraform.tfstate
-- stage-terraform.tfstate
-- prod-terraform.tfstate
-### Verify Resources in Azure Portal for QA, Stage and Prod Environments
-1. Azure Virtual Network
-2. Azure Subnets
-3. Azure Public IP
-4. Azure Linux Virtual Machine
-
-## Step-22: Change web_linuxvm_admin_user to Prod Environment
-```t
-# File: prod.tfvars
-#web_linuxvm_admin_user = "azureuser"
-web_linuxvm_admin_user = "produser" # Enable during step-21
-
-# Git Status
-git status
-
-# Git Commit
-git commit -am "Changed Prod VM adminuser name to produser"
-
-# Git Push
-git push
-```
-
-## Step-23: Review Build (CI) Pipeline  and Release Pipeline(CD) Logs
-### Verify Build Pipeline Logs
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Pipelines -> Terraform Continuous Integration CI Pipeline
-
-### Verify Release Pipeline Logs
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Releases -> Terraform CD
-- **Dev Stage:** Review Logs
-- **QA Stage:** Approve (Pre-Deployment Approval) and Review Logs
-- **Staging Stage:** Approve (Pre-Deployment Approval) and Review logs and also do Post-Deployment Approval
-- **Prod Stage:** Approve (Pre-Deployment Approval) 
-
-### Verify Virtual Machines in Azure Portal
-- Go to -> Virtual Machines
-- Verify VM `hr-prod-web-linuxvm` and get the Public IP
-```t
-# Connect to prod VM using SSH
-ssh -i ssh-keys/terraform-azure.pem produser@<Prod-VM-Public-IP>
-```
-
-## Step-24: Disable Build (CI) Pipeline
-- Go to  Azure DevOps -> Organization (stacksimplify1) -> Project (terraform-on-azure-with-azure-devops) -> Pipelines -> Pipelines -> Terraform Continuous Integration CI Pipeline
-- Settings -> Disabled -> Click on **Save**
-- This will help us if by any chance you made any accidental commits to your git repo we don't get any unexpected surprise azure bills. 
-
-## Step-25: Delete Resources or Clean-Up
-### Delete Resources
-- Go to Azure Portal -> Resource Groups -> Delete Resource Groups for All Environments
-- Dev
-- QA
-- Staging
-- Prod
-### Delete Terraform State Files
-- Go to Azure Portal -> Storage Containers -> terraformstate201 -> Containers -> tfstatefiles -> Delete all files
-- dev-terraform.tfstate
-- qa-terraform.tfstate
-- stage-terraform.tfstate
-- prod-terraform.tfstate
 
