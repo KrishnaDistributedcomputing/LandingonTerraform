@@ -20,6 +20,26 @@ description: Create Azure Bastion Host and Service using Terraform
 
 
 ## Pre-requisite Note: Create SSH Keys for Azure Linux VM
+
+This is a set of commands that can be executed on a terminal to create an SSH key pair in preparation for use in the Terraform infrastructure-as-code (IaC) tool. The commands perform the following tasks:
+
+Navigate to the directory where the Terraform manifests will be stored (cd terraform-manifests/).
+- Create a new directory called ssh-keys (mkdir ssh-keys).
+-Navigate into the ssh-keys directory (cd ssh-keys).
+
+### Use the ssh-keygen command to generate a new SSH key pair with the following options:
+
+- -m PEM: specifies that the key should be in PEM format.
+- -t rsa: specifies that the key should use the RSA algorithm.
+- -b 4096: specifies the key length as 4096 bits.
+- -C "azureuser@myserver": adds a comment to the key indicating who it belongs to.
+- -f terraform-azure.pem: specifies the file name for the key pair.
+
+### List the contents of the ssh-keys directory (ls -lrt ssh-keys/).
+- Rename the public key file (mv terraform-azure.pem.pub terraform-azure.pub).
+- Set the file permissions on the private key to 400 (chmod 400 terraform-azure.pem).
+- The resulting SSH key pair can then be used in the Terraform code to configure the resources that will be provisioned in the target environment.
+
 ```t
 # Create Folder
 cd terraform-manifests/
@@ -133,6 +153,13 @@ terraform {
 }
 ```
 ### Step-03-02: Add Null Resource and Terraform Provisioners
+This is a Terraform configuration that creates a null_resource and defines provisioners to execute commands on an Azure virtual machine instance. The null_resource does not represent a physical resource and can be used as a placeholder for running provisioners.
+
+The code includes a connection block that specifies the type of connection (in this case SSH), the host and username of the VM instance, and the private key file to use for authentication.
+
+The provisioners section defines two types of provisioners: file and remote-exec. The file provisioner copies a file from the local machine to the remote machine, while the remote-exec provisioner executes a command on the remote machine. The inline command in the remote-exec provisioner sets the permissions on the private key file.
+
+Additionally, the code specifies the provisioners to be created at two different times: creation time and destroy time. Creation time provisioners are executed during the creation of the resource (i.e., when terraform apply is run), while destroy time provisioners are executed during the destruction of the resource (i.e., when terraform destroy is run).
 ```t
 # Create a Null Resource and Provisioners
 resource "null_resource" "name" {
