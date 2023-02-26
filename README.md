@@ -3,9 +3,6 @@ title: Azure Bastion Host and Service using Terraform
 description: Create Azure Bastion Host and Service using Terraform
 ---
 
-## Creating Azure Bastion Host and Service using Terraform:-
-The script creates two important Azure Bastion resources: the Azure Bastion Host and the Azure Bastion Service. It utilizes various Azure resources, such as Terraform input variables, azurerm_public_ip, azurerm_network_interface, azurerm_linux_virtual_machine, azurerm_subnet, azurerm_bastion_host, and others, as well as Terraform Null Resource, Terraform File Provisioner, and Terraform remote-exec Provisioner. Additionally, the script involves creating SSH keys for the Azure Linux VM and moving them to the Bastion Host. It also removes public access to the Web Linux VM and verifies the resources and connectivity to the created Azure Bastion Host and Service.
-
 ## Step-00: Introduction
 - We are going to create two important Bastion Resources 
 1. Azure Bastion Host 
@@ -223,7 +220,7 @@ bastion_service_address_prefixes = ["10.1.101.0/27"]
 - Test the SSH Connectivity to Web Linux VM using 
 1. Azure Bastion Host Linux VM
 2. Azure Bastion Service
-### Step-07-01: Comment c7-02-web-linuxvm-publicip.tf
+### Step-07-01: Comment Ex02-web-linuxvm-publicip.tf
 ```t
 /*
 # Resource-1: Create Public IP Address
@@ -238,7 +235,7 @@ resource "azurerm_public_ip" "web_linuxvm_publicip" {
 */
 ```
 
-### Step-07-02: c7-03-web-linuxvm-network-interface.tf
+### Step-07-02: Ex03-web-linuxvm-network-interface.tf
 - Comment public IP association related argument in Network Interface Resource `public_ip_address_id = azurerm_public_ip.web_linuxvm_publicip.id`
 
 ```t
@@ -257,7 +254,7 @@ resource "azurerm_network_interface" "web_linuxvm_nic" {
 }
 ```
 
-### Step-07-03: c7-06-web-linuxvm-outputs.tf
+### Step-07-03: Ex06-web-linuxvm-outputs.tf
 - Comment Outputs related to Public IP Address
 ```t
 /*
