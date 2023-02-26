@@ -46,7 +46,7 @@ Private Key: terraform-azure.pem
 chmod 400 terraform-azure.pem
 ```
 
-## Step-01: c8-01-bastion-host-input-variables.tf
+## Step-01: Ex-01-bastion-host-input-variables.tf
 ```t
 # Bastion Linux VM Input Variables Placeholder file.
 variable "bastion_service_subnet_name" {
@@ -59,7 +59,7 @@ variable "bastion_service_address_prefixes" {
 }
 ```
 
-## Step-02: c8-02-bastion-host-linuxvm.tf
+## Step-02: Ex-02-bastion-host-linuxvm.tf
 ```t
 # Resource-1: Create Public IP Address
 resource "azurerm_public_ip" "bastion_host_publicip" {
@@ -110,7 +110,7 @@ resource "azurerm_linux_virtual_machine" "bastion_host_linuxvm" {
 }
 ```
 
-## Step-03: c8-03-move-ssh-key-to-bastion-host.tf
+## Step-03: Ex-03-move-ssh-key-to-bastion-host.tf
 ### Step-03-01: Add Null Provider in c1-versions.tf
 ```t
 # Terraform Block
@@ -162,7 +162,7 @@ resource "null_resource" "name" {
 # Destory Time Provisioners - Will be executed during "terraform destroy" command (when = destroy)
 ```
 
-## Step-04: c8-04-AzureBastionService.tf
+## Step-04: Ex-04-AzureBastionService.tf
 ```t
 
 # Azure Bastion Service - Resources
@@ -198,7 +198,7 @@ resource "azurerm_bastion_host" "bastion_host" {
 
 ```
 
-## Step-05: c8-05-bastion-outputs.tf
+## Step-05: Ex-05-bastion-outputs.tf
 ```t
 ## Bastion Host Public IP Output
 output "bastion_host_linuxvm_public_ip_address" {
